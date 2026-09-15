@@ -551,9 +551,18 @@ function Install-OpenSSL {
     Write-Log 'OpenSSL installed.' 'OK'
 }
 
+function Test-MySQLDir {
+    # Validates that a given directory has the required MySQL files for building.
+    param([string]$Root)
+    if (-not $Root -or -not (Test-Path $Root)) { return $false }
+    return (Test-Path (Join-Path $Root 'include')) -and
+           (Test-Path (Join-Path $Root 'lib\libmysql.lib')) -and
+           (Test-Path (Join-Path $Root 'lib\libmysql.dll'))
+}
+
 function Find-MySQLInstall {
     # Returns a hashtable with Include, Lib, and Dll paths, or $null if not found.
-    # Searches registry keys written by MySQL Installer (all versions/editions).
+    # Search order: registry (MySQL AB keys), uninstall registry, build-config.json mysqlDir.
     $regPaths = @(
         'HKLM:\SOFTWARE\MySQL AB',
         'HKLM:\SOFTWARE\WOW6432Node\MySQL AB'
@@ -586,12 +595,29 @@ function Find-MySQLInstall {
     }
 
     foreach ($root in $candidates) {
-        $inc = Join-Path $root 'include'
-        $lib = Join-Path $root 'lib\libmysql.lib'
-        $dll = Join-Path $root 'lib\libmysql.dll'
-        if ((Test-Path $inc) -and (Test-Path $lib) -and (Test-Path $dll)) {
+        if (Test-MySQLDir $root) {
+            $inc = Join-Path $root 'include'
+            $lib = Join-Path $root 'lib\libmysql.lib'
+            $dll = Join-Path $root 'lib\libmysql.dll'
             return @{ Include = $inc; Lib = $lib; Dll = $dll; Root = $root }
         }
+    }
+
+    # Fallback: check build-config.json for a previously saved mysqlDir
+    $configPath = Join-Path $ScriptRoot 'build-config.json'
+    if (Test-Path $configPath) {
+        try {
+            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            if ($cfg.PSObject.Properties['mysqlDir'] -and (Test-MySQLDir $cfg.mysqlDir)) {
+                $root = $cfg.mysqlDir
+                return @{
+                    Include = Join-Path $root 'include'
+                    Lib     = Join-Path $root 'lib\libmysql.lib'
+                    Dll     = Join-Path $root 'lib\libmysql.dll'
+                    Root    = $root
+                }
+            }
+        } catch { }
     }
 
     return $null
@@ -605,6 +631,22 @@ function Test-MySQLStaged {
     return (Test-Path $inc) -and (Test-Path $lib) -and (Test-Path $dll)
 }
 
+function Save-MySQLDirToConfig {
+    param([string]$MySQLRoot)
+    $configPath = Join-Path $ScriptRoot 'build-config.json'
+    try {
+        $cfg = if (Test-Path $configPath) { Get-Content $configPath -Raw | ConvertFrom-Json } else { [PSCustomObject]@{} }
+        # Add or update mysqlDir using a temp ordered hashtable to preserve existing keys
+        $updated = [ordered]@{}
+        foreach ($prop in $cfg.PSObject.Properties) { $updated[$prop.Name] = $prop.Value }
+        $updated['mysqlDir'] = $MySQLRoot
+        $updated | ConvertTo-Json -Depth 5 | Set-Content $configPath -Encoding UTF8
+        Write-Log "Saved mysqlDir to build-config.json: $MySQLRoot" 'OK'
+    } catch {
+        Write-Log "Could not save mysqlDir to build-config.json: $($_.Exception.Message)" 'WARN'
+    }
+}
+
 function Stage-MySQLFiles {
     if (Test-MySQLStaged -ScriptRoot $ScriptRoot) {
         Write-Log 'MySQL headers and libraries already staged in Database\.' 'OK'
@@ -612,8 +654,31 @@ function Stage-MySQLFiles {
     }
 
     $mysql = Find-MySQLInstall
+
+    # If not found automatically, prompt the user for the path (interactive installs only)
+    if (-not $mysql -and -not $CheckOnly) {
+        Write-Log 'MySQL Server not found via registry or build-config.json.' 'WARN'
+        Write-Log 'If you have a portable or custom MySQL install, enter its root directory now.' 'WARN'
+        Write-Log 'The directory must contain include\ and lib\libmysql.lib and lib\libmysql.dll.' 'WARN'
+        $userPath = Read-Host 'MySQL root directory (leave blank to skip)'
+        if ($userPath) {
+            $userPath = $userPath.Trim().TrimEnd('\').TrimEnd('/')
+            if (Test-MySQLDir $userPath) {
+                $mysql = @{
+                    Include = Join-Path $userPath 'include'
+                    Lib     = Join-Path $userPath 'lib\libmysql.lib'
+                    Dll     = Join-Path $userPath 'lib\libmysql.dll'
+                    Root    = $userPath
+                }
+                Save-MySQLDirToConfig -MySQLRoot $userPath
+            } else {
+                Write-Log "Path '$userPath' does not contain the required MySQL files (include\, lib\libmysql.lib, lib\libmysql.dll). Skipping." 'WARN'
+            }
+        }
+    }
+
     if (-not $mysql) {
-        Write-Log 'MySQL Server installation not found via registry. Install MySQL Server and re-run, or stage Database\include\ and Database\lib\ manually.' 'WARN'
+        Write-Log 'MySQL not staged. Stage Database\include\ and Database\lib\ manually, or re-run after installing MySQL.' 'WARN'
         return
     }
 

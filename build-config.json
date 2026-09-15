@@ -1,5 +1,6 @@
 {
   "azerothcore": "https://github.com/mod-playerbots/azerothcore-wotlk",
+  "mysqlDir": "",
   "modules": [
     "https://github.com/mod-playerbots/mod-playerbots",
     "https://github.com/DustinHendrickson/mod-classless-wildcard",

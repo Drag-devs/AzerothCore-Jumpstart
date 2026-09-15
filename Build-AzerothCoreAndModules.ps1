@@ -34,7 +34,21 @@ function Find-MySQLDll {
             $dll = Join-Path $_.InstallLocation 'lib\libmysql.dll'
             if (Test-Path $dll) { $dll }
         } | Select-Object -First 1
-    return $result
+    if ($result) { return $result }
+
+    # Fallback: check build-config.json for a user-supplied mysqlDir
+    $configPath = Join-Path $WorkDir 'build-config.json'
+    if (Test-Path $configPath) {
+        try {
+            $cfgMysql = Get-Content $configPath -Raw | ConvertFrom-Json
+            if ($cfgMysql.PSObject.Properties['mysqlDir'] -and $cfgMysql.mysqlDir) {
+                $dll = Join-Path $cfgMysql.mysqlDir 'lib\libmysql.dll'
+                if (Test-Path $dll) { return $dll }
+            }
+        } catch { }
+    }
+
+    return $null
 }
 
 function Invoke-PostBuildSetup {

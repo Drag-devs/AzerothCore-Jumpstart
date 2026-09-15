@@ -18,10 +18,12 @@ PowerShell scripts for building [AzerothCore](https://www.azerothcore.org/) with
 
 Install [MySQL Server](https://dev.mysql.com/downloads/mysql/) (8.0 recommended). **MySQL Server itself is not installed by the dependency script** - you must install it manually. Once installed, `Install-Build-Dependencies.ps1` will automatically locate it via the Windows registry and stage the required headers and libraries into `Database\` - no manual file copying needed.
 
-`libmysql.dll` is also required **at runtime** by `worldserver.exe` and `authserver.exe`. The build script copies it automatically after each successful build using the same registry-based location. If MySQL cannot be found in the registry, the script will warn and you can stage the files manually:
+`libmysql.dll` is also required **at runtime** by `worldserver.exe` and `authserver.exe`. The build script copies it automatically after each successful build using the same registry-based location.
+
+If MySQL cannot be found in the registry (e.g. a portable or non-installer MySQL), `Install-Build-Dependencies.ps1` will prompt you to enter the MySQL root directory. That path is validated for the required files and then saved to `build-config.json` as `mysqlDir` so future runs find it automatically. If you prefer to skip the prompt, you can stage the files manually:
 
 ```
-Database\include\   <- contents of <MySQL install>\include\
+Database\include\   <- contents of <MySQL root>\include\
 Database\lib\libmysql.lib
 Database\lib\libmysql.dll
 ```
@@ -143,7 +145,7 @@ After each build, the script copies these DLLs into the build output folder alon
 
 | DLL | Source |
 |---|---|
-| `libmysql.dll` | Located via registry from your MySQL Server installation |
+| `libmysql.dll` | Located via registry, or `mysqlDir` in `build-config.json`, or staged `Database\lib\` |
 | `legacy.dll` | Located from `OPENSSL_ROOT_DIR\bin\` |
 | `libcrypto-3-x64.dll` | Located from `OPENSSL_ROOT_DIR\bin\` |
 | `libssl-3-x64.dll` | Located from `OPENSSL_ROOT_DIR\bin\` |
