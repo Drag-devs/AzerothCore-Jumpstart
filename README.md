@@ -16,14 +16,17 @@ PowerShell scripts for building [AzerothCore](https://www.azerothcore.org/) with
 
 ### MySQL (manual install required)
 
-**MySQL is not installed by the dependency script.** You must install MySQL separately and place the required files at these paths relative to the script root:
+Install [MySQL Server](https://dev.mysql.com/downloads/mysql/) (8.0 recommended). **MySQL Server itself is not installed by the dependency script** - you must install it manually. Once installed, `Install-Build-Dependencies.ps1` will automatically locate it via the Windows registry and stage the required headers and libraries into `Database\` - no manual file copying needed.
+
+`libmysql.dll` is also required **at runtime** by `worldserver.exe` and `authserver.exe`. The build script copies it automatically after each successful build using the same registry-based location. If MySQL cannot be found in the registry, the script will warn and you can stage the files manually:
 
 ```
-Database\include\   - MySQL headers (e.g. mysql.h)
+Database\include\   <- contents of <MySQL install>\include\
 Database\lib\libmysql.lib
+Database\lib\libmysql.dll
 ```
 
-The simplest way to obtain these is to install [MySQL Server](https://dev.mysql.com/downloads/mysql/) (8.0 recommended) and copy the `include` and `lib` folders from the MySQL installation into your `Database\` directory. The `libmysql.dll` must also be accessible at runtime (either in the same folder as the server binaries or on `PATH`).
+The DLL version must match your running MySQL Server version - if you upgrade MySQL, re-run option 9 and rebuild.
 
 ### Automated Dependencies
 
@@ -52,9 +55,10 @@ These scripts must live in the **root directory where builds will happen**. The 
     Install-Build-Dependencies.ps1
     build-config.json
     Database\
-        include\        <- MySQL headers
+        include\        <- staged automatically from MySQL install
         lib\
-            libmysql.lib
+            libmysql.lib    <- staged automatically
+            libmysql.dll    <- staged automatically, copied to build output after each build
     Source\             <- cloned automatically by the build script
     build-test\         <- CMake build output (TEST builds)
     build-stable\       <- CMake build output (STABLE builds)
@@ -68,7 +72,7 @@ Place all three scripts and `build-config.json` directly in this root folder bef
 ## First-Time Setup
 
 1. Copy the scripts and `build-config.json` into your build root directory.
-2. Install MySQL and copy headers/lib into `Database\` as described above.
+2. Install MySQL Server (see Prerequisites above).
 3. Right-click `Build-AzerothCoreAndModules.ps1` and choose **Run with PowerShell**, or run it from a PowerShell terminal:
    ```powershell
    .\Build-AzerothCoreAndModules.ps1
@@ -88,6 +92,7 @@ Place all three scripts and `build-config.json` directly in this root folder bef
 | 3 | TEST - wipe source entirely, fresh `git clone` + CMake configure + clean build |
 | 4 | TEST - CMake configure + clean build using current local source, no git |
 | 5 | TEST - incremental build only, no CMake configure, no clean (fastest) |
+| 6 | Post-build setup - copy DLLs and display config directory reminders (runs automatically after builds too) |
 | 8 | Check all build dependencies without installing anything |
 | 9 | Install build dependencies (opens an elevated PowerShell window) |
 | 0 | Exit |
@@ -117,12 +122,52 @@ Modules are cloned into `Source\modules\` and are wiped and re-cloned on any bui
 ## Limitations
 
 - **Windows only.** The scripts use winget, the Windows Registry, MSI/EXE installers, and Visual Studio toolchains. Linux/macOS builds are not supported.
-- **MySQL is not automated.** The dependency installer does not install MySQL or configure the database server. See the Prerequisites section above.
+- **MySQL Server install is not automated.** You must install MySQL Server manually. Once installed, the dependency script locates it via the registry and stages the required files automatically. See the Prerequisites section above.
 - **Visual Studio 2022 only.** CMake is configured with the `"Visual Studio 17 2022"` generator. Earlier versions of Visual Studio are not supported.
 - **x64 only.** All build targets and library paths are hardcoded for 64-bit Windows.
 - **Boost download requires internet access** unless an offline installer path is provided via `-OfflineInstallerPath`. The Boost binary is approximately 300 MB.
 - **Offline mode** requires all installers to be pre-staged at the path passed to `-OfflineInstallerPath`. See installer function comments for expected filenames.
 - The build script does not install or start the AzerothCore database. That step must be performed separately using the AzerothCore database tools after a successful build.
+- **Client data files are not included or extracted.** The server requires DBC, maps, vmaps, mmaps, and camera files extracted from a WoW 3.3.5a client. These must be obtained and configured separately - see [Windows Server Setup](https://www.azerothcore.org/wiki/windows-server-setup). Pre-extracted enUS files are available for download; other locales must be self-extracted using the extractor tools built alongside the server.
+- **Post-build config setup is required.** After a successful build you must rename `.conf.dist` files to `.conf` and configure database connection strings, `DataDir`, and `SourceDirectory` before the server will run. The required DLLs are copied automatically. See [Windows Core Installation](https://www.azerothcore.org/wiki/windows-core-installation) for full details.
+
+---
+
+## After a Successful Build
+
+The build script handles DLL copying automatically. The following steps remain manual and are required before the server will run.
+
+### 1. DLLs (handled automatically)
+
+After each build, the script copies these DLLs into the build output folder alongside `worldserver.exe`:
+
+| DLL | Source |
+|---|---|
+| `libmysql.dll` | Located via registry from your MySQL Server installation |
+| `legacy.dll` | Located from `OPENSSL_ROOT_DIR\bin\` |
+| `libcrypto-3-x64.dll` | Located from `OPENSSL_ROOT_DIR\bin\` |
+| `libssl-3-x64.dll` | Located from `OPENSSL_ROOT_DIR\bin\` |
+
+If automatic detection fails, the script will warn. Run option `[6]` to retry, or copy them manually. Reference: [Windows Core Installation](https://www.azerothcore.org/wiki/windows-core-installation)
+
+### 2. Set up config files
+
+In the build output `configs\` folder, copy `worldserver.conf.dist` and `authserver.conf.dist` and rename the copies to `worldserver.conf` and `authserver.conf`. Update at minimum:
+
+- `LoginDatabaseInfo`, `WorldDatabaseInfo`, `CharacterDatabaseInfo` - MySQL connection strings
+- `DataDir` - path to your extracted client data folder (see step 3)
+- `SourceDirectory` - path to the `Source\` directory (where the AzerothCore source was cloned)
+
+Reference: [Windows Server Setup - Config Files](https://www.azerothcore.org/wiki/windows-server-setup)
+
+### 3. Obtain and configure client data files
+
+The server requires extracted client data. Two options:
+
+- **Download pre-extracted (enUS only):** [AC Data releases](https://github.com/wowgaming/client-data/releases/) - extract into a `Data\` folder and set `DataDir` in `worldserver.conf` to point to it.
+- **Extract yourself:** Copy the extractor tools from the build output into your WoW 3.3.5a client folder and run `extractor.bat`. Required: `dbc`, `maps`, `vmaps`. Highly recommended: `mmaps`, `cameras`.
+
+Reference: [Windows Server Setup - Client Data](https://www.azerothcore.org/wiki/windows-server-setup)
 
 ---
 

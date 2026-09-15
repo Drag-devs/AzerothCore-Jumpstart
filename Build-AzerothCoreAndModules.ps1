@@ -7,6 +7,87 @@ $MySqlLib = "$WorkDir\Database\lib\libmysql.lib"
 
 $cfg = Get-Content "$WorkDir\build-config.json" | ConvertFrom-Json
 
+function Find-MySQLDll {
+    # Returns the path to libmysql.dll: first checks staged Database\lib\, then registry.
+    $staged = Join-Path $WorkDir 'Database\lib\libmysql.dll'
+    if (Test-Path $staged) { return $staged }
+
+    $regPaths = @('HKLM:\SOFTWARE\MySQL AB', 'HKLM:\SOFTWARE\WOW6432Node\MySQL AB')
+    foreach ($base in $regPaths) {
+        if (-not (Test-Path $base)) { continue }
+        Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
+            $loc = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).Location
+            if ($loc) {
+                $dll = Join-Path $loc 'lib\libmysql.dll'
+                if (Test-Path $dll) { return $dll }
+            }
+        }
+    }
+
+    $uninstallPaths = @(
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+    )
+    $result = Get-ItemProperty $uninstallPaths -ErrorAction SilentlyContinue |
+        Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match 'MySQL Server' -and $_.PSObject.Properties['InstallLocation'] -and $_.InstallLocation } |
+        ForEach-Object {
+            $dll = Join-Path $_.InstallLocation 'lib\libmysql.dll'
+            if (Test-Path $dll) { $dll }
+        } | Select-Object -First 1
+    return $result
+}
+
+function Invoke-PostBuildSetup {
+    param([Parameter(Mandatory = $true)][string]$BuildOutputDir)
+
+    if (-not (Test-Path $BuildOutputDir)) {
+        Write-Host "[SKIP] Build output not found: $BuildOutputDir"
+        return
+    }
+
+    Write-Host ""
+    Write-Host "Post-build setup: $BuildOutputDir"
+
+    # Copy libmysql.dll
+    $mysqlDll = Find-MySQLDll
+    if ($mysqlDll) {
+        Copy-Item $mysqlDll -Destination $BuildOutputDir -Force
+        Write-Host "  [OK] Copied libmysql.dll from $mysqlDll"
+    } else {
+        Write-Host "  [WARN] libmysql.dll not found - install MySQL Server or stage Database\lib\ manually."
+    }
+
+    # Copy OpenSSL DLLs
+    $opensslBin = $null
+    $opensslRoot = [Environment]::GetEnvironmentVariable('OPENSSL_ROOT_DIR', 'Machine')
+    if (-not $opensslRoot) { $opensslRoot = $env:OPENSSL_ROOT_DIR }
+    if ($opensslRoot -and (Test-Path (Join-Path $opensslRoot 'bin'))) {
+        $opensslBin = Join-Path $opensslRoot 'bin'
+    }
+
+    if ($opensslBin) {
+        foreach ($dll in @('legacy.dll', 'libcrypto-3-x64.dll', 'libssl-3-x64.dll')) {
+            $src = Join-Path $opensslBin $dll
+            if (Test-Path $src) {
+                Copy-Item $src -Destination $BuildOutputDir -Force
+                Write-Host "  [OK] Copied $dll"
+            } else {
+                Write-Host "  [WARN] $dll not found in $opensslBin"
+            }
+        }
+    } else {
+        Write-Host "  [WARN] OPENSSL_ROOT_DIR not set - OpenSSL DLLs not copied. Run option 9 first."
+    }
+
+    Write-Host ""
+    Write-Host "  Config reminder - update these settings in worldserver.conf and authserver.conf:"
+    Write-Host "    SourceDirectory  = path to your source folder (this repo's Source\ directory)"
+    Write-Host "      -> $SrcDir"
+    Write-Host "    DataDir          = path to your extracted client data folder (dbc, maps, vmaps, etc.)"
+    Write-Host "    LoginDatabaseInfo, WorldDatabaseInfo, CharacterDatabaseInfo = MySQL connection strings"
+    Write-Host "  Configs are in: $BuildOutputDir\configs\"
+}
+
 # Run a dependency script in the same console window via Start-Process -NoNewWindow.
 function Invoke-DependencyScript {
     param([string]$ScriptPath, [string[]]$ExtraArgs = @())
@@ -27,12 +108,26 @@ while ($true) {
     Write-Host "[4] Build TEST  - cmake configure + clean build (no git)"
     Write-Host "[5] Build TEST  - cmake build only, no configure, no clean (fastest)"
     Write-Host ""
+    Write-Host "[6] Post-build setup - copy DLLs and show config reminders"
+    Write-Host ""
     Write-Host "[8] Check build dependencies"
     Write-Host "[9] Install build dependencies (requires admin - opens new window)"
     Write-Host ""
     Write-Host "[0] Exit"
     Write-Host ""
     $choice = Read-Host "Enter choice"
+
+    if ($choice -eq "6") {
+        Write-Host ""
+        foreach ($dir in @($BuildDirTest, $BuildDirStable)) {
+            if (Test-Path "$dir\bin\RelWithDebInfo") {
+                Invoke-PostBuildSetup -BuildOutputDir "$dir\bin\RelWithDebInfo"
+            }
+        }
+        Write-Host ""
+        Read-Host "Press Enter to return to menu"
+        continue
+    }
 
     if ($choice -eq "8") {
         Write-Host ""
@@ -196,9 +291,27 @@ if ($incremental) {
     cmake --build $buildDir --config RelWithDebInfo --clean-first
 }
 
+if ($LASTEXITCODE -ne 0) {
+    Write-Host ""
+    Write-Host "[ERROR] Build failed. Check output above."
+    Write-Host ""
+    Read-Host "Press Enter to exit"
+    exit 1
+}
+
 Write-Host ""
 Write-Host "======================================================"
 Write-Host "  Build complete for choice $choice."
 Write-Host "  Output: $buildDir\bin\RelWithDebInfo"
 Write-Host "======================================================"
+
+Invoke-PostBuildSetup -BuildOutputDir "$buildDir\bin\RelWithDebInfo"
+
+Write-Host ""
+Write-Host "Next steps:"
+Write-Host "  - If not already done, copy .conf.dist files to .conf in the configs\ folder"
+Write-Host "  - Set DataDir in worldserver.conf to your extracted client data folder"
+Write-Host "  - Set database connection strings (LoginDatabaseInfo, WorldDatabaseInfo, CharacterDatabaseInfo)"
+Write-Host "  - See: https://www.azerothcore.org/wiki/windows-server-setup"
+Write-Host ""
 Read-Host "Press Enter to exit"

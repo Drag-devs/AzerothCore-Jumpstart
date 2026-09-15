@@ -551,6 +551,94 @@ function Install-OpenSSL {
     Write-Log 'OpenSSL installed.' 'OK'
 }
 
+function Find-MySQLInstall {
+    # Returns a hashtable with Include, Lib, and Dll paths, or $null if not found.
+    # Searches registry keys written by MySQL Installer (all versions/editions).
+    $regPaths = @(
+        'HKLM:\SOFTWARE\MySQL AB',
+        'HKLM:\SOFTWARE\WOW6432Node\MySQL AB'
+    )
+
+    $candidates = @()
+
+    foreach ($base in $regPaths) {
+        if (-not (Test-Path $base)) { continue }
+        Get-ChildItem $base -ErrorAction SilentlyContinue | ForEach-Object {
+            $loc = (Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue).Location
+            if ($loc -and (Test-Path $loc)) { $candidates += $loc }
+        }
+    }
+
+    # Fallback: scan uninstall registry for "MySQL Server" entries with an InstallLocation
+    if ($candidates.Count -eq 0) {
+        $uninstallPaths = @(
+            'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*'
+        )
+        Get-ItemProperty $uninstallPaths -ErrorAction SilentlyContinue |
+            Where-Object {
+                $_.PSObject.Properties['DisplayName'] -and
+                $_.DisplayName -match 'MySQL Server' -and
+                $_.PSObject.Properties['InstallLocation'] -and
+                $_.InstallLocation
+            } |
+            ForEach-Object { $candidates += $_.InstallLocation }
+    }
+
+    foreach ($root in $candidates) {
+        $inc = Join-Path $root 'include'
+        $lib = Join-Path $root 'lib\libmysql.lib'
+        $dll = Join-Path $root 'lib\libmysql.dll'
+        if ((Test-Path $inc) -and (Test-Path $lib) -and (Test-Path $dll)) {
+            return @{ Include = $inc; Lib = $lib; Dll = $dll; Root = $root }
+        }
+    }
+
+    return $null
+}
+
+function Test-MySQLStaged {
+    param([string]$ScriptRoot)
+    $inc = Join-Path $ScriptRoot 'Database\include'
+    $lib = Join-Path $ScriptRoot 'Database\lib\libmysql.lib'
+    $dll = Join-Path $ScriptRoot 'Database\lib\libmysql.dll'
+    return (Test-Path $inc) -and (Test-Path $lib) -and (Test-Path $dll)
+}
+
+function Stage-MySQLFiles {
+    if (Test-MySQLStaged -ScriptRoot $ScriptRoot) {
+        Write-Log 'MySQL headers and libraries already staged in Database\.' 'OK'
+        return
+    }
+
+    $mysql = Find-MySQLInstall
+    if (-not $mysql) {
+        Write-Log 'MySQL Server installation not found via registry. Install MySQL Server and re-run, or stage Database\include\ and Database\lib\ manually.' 'WARN'
+        return
+    }
+
+    Write-Log "Found MySQL installation at: $($mysql.Root)"
+
+    $destInc = Join-Path $ScriptRoot 'Database\include'
+    $destLib = Join-Path $ScriptRoot 'Database\lib'
+
+    if (-not (Test-Path $destInc)) { New-Item -ItemType Directory -Path $destInc | Out-Null }
+    if (-not (Test-Path $destLib)) { New-Item -ItemType Directory -Path $destLib | Out-Null }
+
+    Copy-Item -Path "$($mysql.Include)\*" -Destination $destInc -Recurse -Force
+    Copy-Item -Path $mysql.Lib -Destination $destLib -Force
+    Copy-Item -Path $mysql.Dll -Destination $destLib -Force
+
+    Write-Log 'MySQL headers and libraries staged in Database\.' 'OK'
+}
+
+function Get-StagedMySQLDllPath {
+    param([string]$ScriptRoot)
+    $dll = Join-Path $ScriptRoot 'Database\lib\libmysql.dll'
+    if (Test-Path $dll) { return $dll }
+    return $null
+}
+
 function Refresh-Path {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user = [Environment]::GetEnvironmentVariable('Path', 'User')
@@ -570,6 +658,7 @@ function Verify-All {
     $results['BOOST_ROOT env var'] = $boostRoot -and (Test-Path (Join-Path $boostRoot 'boost\version.hpp'))
     $opensslRoot = [Environment]::GetEnvironmentVariable('OPENSSL_ROOT_DIR', 'Machine')
     $results['OPENSSL_ROOT_DIR env var'] = $opensslRoot -and (Test-Path (Join-Path $opensslRoot 'include\openssl\ssl.h'))
+    $results['MySQL staged (Database\)'] = Test-MySQLStaged -ScriptRoot $ScriptRoot
 
     Write-Log 'Verification summary:'
     foreach ($k in $results.Keys) {
@@ -617,6 +706,7 @@ try {
     Install-VCRedist
     Install-Boost
     Install-OpenSSL
+    Stage-MySQLFiles
 
     Refresh-Path
 
