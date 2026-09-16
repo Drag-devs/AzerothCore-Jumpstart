@@ -91,13 +91,27 @@ function Invoke-PostBuildSetup {
     }
 
     if ($opensslBin) {
-        foreach ($dll in @('legacy.dll', 'libcrypto-3-x64.dll', 'libssl-3-x64.dll')) {
+        # Copy legacy.dll by exact name, then glob for versioned libcrypto/libssl DLLs
+        $exactDlls = @('legacy.dll')
+        $globDlls  = @('libcrypto*.dll', 'libssl*.dll')
+        foreach ($dll in $exactDlls) {
             $src = Join-Path $opensslBin $dll
             if (Test-Path $src) {
                 Copy-Item $src -Destination $BuildOutputDir -Force
                 Write-Host "  [OK] Copied $dll"
             } else {
                 Write-Host "  [WARN] $dll not found in $opensslBin"
+            }
+        }
+        foreach ($pattern in $globDlls) {
+            $matches = Get-ChildItem (Join-Path $opensslBin $pattern) -ErrorAction SilentlyContinue
+            if ($matches) {
+                $matches | ForEach-Object {
+                    Copy-Item $_.FullName -Destination $BuildOutputDir -Force
+                    Write-Host "  [OK] Copied $($_.Name)"
+                }
+            } else {
+                Write-Host "  [WARN] No $pattern found in $opensslBin"
             }
         }
     } else {

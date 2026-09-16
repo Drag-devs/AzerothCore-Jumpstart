@@ -496,7 +496,10 @@ function Find-OpenSSLRoot {
 
 function Set-OpenSSLEnvVars {
     $existing = [Environment]::GetEnvironmentVariable('OPENSSL_ROOT_DIR', 'Machine')
-    if ($existing -and (Test-Path (Join-Path $existing 'include\openssl\ssl.h'))) {
+    # Validate headers AND at least one runtime DLL exist - a headers-only leftover is not sufficient
+    if ($existing -and
+        (Test-Path (Join-Path $existing 'include\openssl\ssl.h')) -and
+        (Get-ChildItem (Join-Path $existing 'bin') -Filter 'libcrypto*.dll' -ErrorAction SilentlyContinue)) {
         $env:OPENSSL_ROOT_DIR = $existing
         Write-Log "OPENSSL_ROOT_DIR already set: $existing" 'OK'
         return
