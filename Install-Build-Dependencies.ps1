@@ -530,11 +530,9 @@ function Install-OpenSSL {
     }
 
     if (Test-Winget) {
-        # ShiningLight.OpenSSL.Dev includes headers/libs needed by CMake (Light builds do not)
-        # /VERYSILENT suppresses all Inno Setup dialogs including the DLL copy location prompt
-        $override = '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /TASKS=""'
+        # ShiningLight.OpenSSL.Dev includes headers and libs; the .Light variant does not
         try {
-            Invoke-WingetInstall -Id 'ShiningLight.OpenSSL.Dev' -Name 'OpenSSL (64-bit Dev)' -Override $override
+            Invoke-WingetInstall -Id 'ShiningLight.OpenSSL.Dev' -Name 'OpenSSL (64-bit Dev)'
         } catch {
             Write-Log "ShiningLight.OpenSSL.Dev failed, trying FireDaemon.OpenSSL..." 'WARN'
             Invoke-WingetInstall -Id 'FireDaemon.OpenSSL' -Name 'OpenSSL (FireDaemon)'
@@ -607,7 +605,11 @@ function Find-MySQLInstall {
     $configPath = Join-Path $ScriptRoot 'build-config.json'
     if (Test-Path $configPath) {
         try {
-            $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
+            $cfgRaw = Get-Content $configPath -Raw
+            $cfgRaw = [regex]::Replace($cfgRaw,
+                '("mysqlDir"\s*:\s*")([^"]*)"',
+                { param($m) $m.Groups[1].Value + $m.Groups[2].Value.Replace('\', '/') + '"' })
+            $cfg = $cfgRaw | ConvertFrom-Json
             if ($cfg.PSObject.Properties['mysqlDir'] -and (Test-MySQLDir $cfg.mysqlDir)) {
                 $root = $cfg.mysqlDir
                 return @{
@@ -639,7 +641,8 @@ function Save-MySQLDirToConfig {
         # Add or update mysqlDir using a temp ordered hashtable to preserve existing keys
         $updated = [ordered]@{}
         foreach ($prop in $cfg.PSObject.Properties) { $updated[$prop.Name] = $prop.Value }
-        $updated['mysqlDir'] = $MySQLRoot
+        # Forward slashes avoid JSON escape issues for users editing the file manually
+        $updated['mysqlDir'] = $MySQLRoot.Replace('\', '/')
         $updated | ConvertTo-Json -Depth 5 | Set-Content $configPath -Encoding UTF8
         Write-Log "Saved mysqlDir to build-config.json: $MySQLRoot" 'OK'
     } catch {

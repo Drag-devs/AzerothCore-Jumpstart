@@ -5,7 +5,18 @@ $BuildDirTest = "$WorkDir\build-test"
 $MySqlInclude = "$WorkDir\Database\include"
 $MySqlLib = "$WorkDir\Database\lib\libmysql.lib"
 
-$cfg = Get-Content "$WorkDir\build-config.json" | ConvertFrom-Json
+try {
+    $cfgRaw = Get-Content "$WorkDir\build-config.json" -Raw
+    # Convert bare backslashes in mysqlDir to forward slashes so users can paste Windows paths directly
+    $cfgRaw = [regex]::Replace($cfgRaw,
+        '("mysqlDir"\s*:\s*")([^"]*)"',
+        { param($m) $m.Groups[1].Value + $m.Groups[2].Value.Replace('\', '/') + '"' })
+    $cfg = $cfgRaw | ConvertFrom-Json
+} catch {
+    Write-Warning "build-config.json parse error: $($_.Exception.Message)"
+    Write-Warning "Tip: In JSON, backslashes must be doubled (e.g. C:\\\\path\\\\to\\\\dir) or use forward slashes (C:/path/to/dir)."
+    exit 1
+}
 
 function Find-MySQLDll {
     # Returns the path to libmysql.dll: first checks staged Database\lib\, then registry.

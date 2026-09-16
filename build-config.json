@@ -1,10 +1,10 @@
 {
   "azerothcore": "https://github.com/mod-playerbots/azerothcore-wotlk",
-  "mysqlDir": "",
+  "mysqlDir": "C:\AzerothCore-Classless\Database",
   "modules": [
     "https://github.com/mod-playerbots/mod-playerbots",
     "https://github.com/DustinHendrickson/mod-classless-wildcard",
-	"https://github.com/azerothcore/mod-transmog",
+    "https://github.com/azerothcore/mod-transmog",
     "https://github.com/azerothcore/mod-ale"
   ]
 }
